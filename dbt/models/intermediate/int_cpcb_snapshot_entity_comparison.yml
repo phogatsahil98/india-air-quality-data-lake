@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: int_cpcb_snapshot_entity_comparison
+    description: >-
+      Full-outer comparison of station-pollutant entities in the latest and
+      immediately previous complete CPCB API extractions. This represents
+      snapshot differences, not a continuous hourly time series.
+    columns:
+      - name: candidate_entity_key
+        description: Candidate station-pollutant key derived from normalized source labels; not an official CPCB identifier.
+        tests:
+          - not_null
+          - unique
+      - name: comparison_status
+        description: Whether the entity is new, missing, changed, or unchanged between the two selected extractions.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['NEW_IN_LATEST', 'MISSING_FROM_LATEST', 'CHANGED', 'UNCHANGED']
+      - name: measurement_values_changed
+        description: True when at least one numeric min, max or average value differs for an entity present in both snapshots.
+      - name: availability_changed
+        description: True when the measurement status differs between snapshots for an entity present in both snapshots.
+      - name: avg_value_delta
+        description: Latest average value minus previous average value when both values are available; source units have not yet been verified.
+      - name: avg_value_pct_change
+        description: Percentage change in average value when both values are available and the previous value is nonzero.

@@ -1,0 +1,77 @@
+
+version: 2
+
+models:
+
+  - name: stg_cpcb_observations
+
+    description: >
+      Standardized staging model for CPCB air quality
+      observations from Indian monitoring stations.
+
+    columns:
+
+      - name: observation_id
+        description: SHA-256 fingerprint of the original observation.
+        data_tests:
+          - not_null
+          - unique
+
+      - name: station_key
+        description: Stable identifier for the monitoring station.
+        data_tests:
+          - not_null
+
+      - name: city
+        description: Original CPCB city name.
+        data_tests:
+          - not_null
+
+      - name: pollutant_id
+        description: CPCB pollutant identifier.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - CO
+                  - NH3
+                  - NO2
+                  - OZONE
+                  - PM10
+                  - PM2.5
+                  - SO2
+
+      - name: measurement_status
+        description: Availability and validity of pollutant measurements.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - AVAILABLE
+                  - UNAVAILABLE
+                  - PARTIAL
+                  - INVALID
+
+      - name: coordinate_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - VALID
+                  - MISSING
+                  - INVALID
+
+      - name: observation_date
+        data_tests:
+          - not_null
+      - name: coordinate_status
+        description: >
+          Indicates whether the monitoring station's
+          latitude and longitude are present, numeric,
+          and within valid geographic ranges.
+
+      - name: observation_date
+        description: >
+          Calendar date derived from the original CPCB
+          observation timestamp.

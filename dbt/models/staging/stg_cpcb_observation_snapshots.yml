@@ -1,0 +1,54 @@
+version: 2
+
+models:
+  - name: stg_cpcb_observation_snapshots
+    description: >-
+      Typed staging view over all preserved CPCB extraction snapshots. Exact
+      source duplicates have already been collapsed within each extraction in
+      PySpark; records from different extractions remain separate.
+    columns:
+      - name: extraction_id
+        description: Immutable UTC identifier for the extraction run.
+        data_tests:
+          - not_null
+      - name: retrieved_at_utc
+        description: Timestamp when the extraction was retrieved, derived from extraction_id.
+        data_tests:
+          - not_null
+      - name: ingestion_date
+        description: Date partition representing the UTC retrieval date.
+        data_tests:
+          - not_null
+      - name: candidate_station_key
+        description: Candidate station identity hash based on source names; not an official CPCB station ID.
+        data_tests:
+          - not_null
+      - name: candidate_entity_key
+        description: Candidate station-pollutant identity hash.
+        data_tests:
+          - not_null
+      - name: pollutant_id
+        description: CPCB pollutant identifier.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CO', 'NH3', 'NO2', 'OZONE', 'PM10', 'PM2.5', 'SO2']
+      - name: measurement_status
+        description: AVAILABLE, UNAVAILABLE, PARTIAL or INVALID_NUMERIC.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['AVAILABLE', 'UNAVAILABLE', 'PARTIAL', 'INVALID_NUMERIC']
+      - name: coordinate_status
+        description: VALID or INVALID after latitude/longitude range checks.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['VALID', 'INVALID']
+      - name: source_record_hash
+        description: Hash of all original CPCB fields, calculated before normalization.
+        data_tests:
+          - not_null

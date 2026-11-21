@@ -1,0 +1,22 @@
+
+version: 2
+
+sources:
+
+  - name: cpcb_silver
+
+    description: >
+      Cleaned CPCB station-level pollutant observations
+      produced by our PySpark Bronze-to-Silver pipeline.
+
+    database: awsdatacatalog
+
+    schema: india_aqi_lake
+
+    tables:
+
+      - name: cpcb_observations
+
+        description: >
+          Deduplicated and validated CPCB observations
+          stored as partitioned Parquet files in Amazon S3.

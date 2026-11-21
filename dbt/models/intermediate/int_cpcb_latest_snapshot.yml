@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: int_cpcb_latest_snapshot
+    description: >-
+      All rows from the most recently retrieved CPCB API extraction. This is a
+      latest-source-snapshot view, not a continuously sampled time series and
+      not an AQI calculation.
+    columns:
+      - name: extraction_id
+        description: Extraction ID for the latest complete API response.
+        data_tests:
+          - not_null
+      - name: retrieved_at_utc
+        description: Retrieval timestamp of the latest complete API response.
+        data_tests:
+          - not_null
+      - name: candidate_entity_key
+        description: Candidate station-pollutant key; not an official CPCB identifier.
+        data_tests:
+          - not_null
+      - name: pollutant_id
+        description: Pollutant represented by the observation.
+        data_tests:
+          - not_null

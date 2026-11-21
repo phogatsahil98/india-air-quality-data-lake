@@ -1,0 +1,221 @@
+
+version: 2
+
+models:
+
+  - name: dim_city
+
+    description: >
+      City dimension containing normalized geographic
+      identifiers and original CPCB city labels.
+
+    columns:
+
+      - name: city_key
+        data_tests:
+          - not_null
+          - unique
+
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: state
+        data_tests:
+          - not_null
+
+
+  - name: dim_station
+
+    description: >
+      Monitoring station dimension.
+
+    columns:
+
+      - name: station_key
+        data_tests:
+          - not_null
+          - unique
+
+      - name: station_name
+        data_tests:
+          - not_null
+
+
+  - name: dim_pollutant
+
+    description: >
+      Reference dimension for CPCB pollutants.
+
+    columns:
+
+      - name: pollutant_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: pollutant_name
+        data_tests:
+          - not_null
+
+
+  - name: fct_station_pollutant_observation
+
+    description: >
+      Central fact table containing exact station-level
+      pollutant observations for each extraction.
+
+    columns:
+
+      - name: fact_observation_key
+        data_tests:
+          - not_null
+          - unique
+
+      - name: city_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_city')
+                field: city_key
+
+      - name: station_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_station')
+                field: station_key
+
+      - name: pollutant_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_pollutant')
+                field: pollutant_id
+
+
+  - name: mart_city_pollutant_snapshot
+
+    description: >
+      City and pollutant level summary for each extraction
+      and observation date.
+
+    columns:
+
+      - name: city_key
+        data_tests:
+          - not_null
+
+      - name: pollutant_id
+        data_tests:
+          - not_null
+
+      - name: measurement_availability_pct
+        data_tests:
+          - not_null
+
+
+  - name: mart_city_data_completeness
+
+    description: >
+      City-level monitoring observation availability
+      for each extraction and observation date.
+
+    columns:
+
+      - name: city_key
+        data_tests:
+          - not_null
+
+      - name: measurement_availability_pct
+        data_tests:
+          - not_null
+
+# dim_city
+
+      - name: city_key
+        description: >
+          Deterministic composite identifier constructed
+          from normalized country, state and city names.
+
+      - name: city
+        description: >
+          Original CPCB city name.
+
+      - name: state
+        description: >
+          Indian state or union territory associated
+          with the city.
+
+
+# dim_pollutant
+
+      - name: pollutant_id
+        description: >
+          Unique CPCB pollutant code.
+
+      - name: pollutant_name
+        description: >
+          Human-readable name of the pollutant.
+
+
+# dim_station
+
+      - name: station_key
+        description: >
+          Deterministic identifier for a monitoring station.
+
+      - name: station_name
+        description: >
+          Name of the CPCB monitoring station.
+
+
+# fct_station_pollutant_observation
+
+      - name: fact_observation_key
+        description: >
+          Unique fact identifier combining extraction ID
+          and source observation fingerprint.
+
+      - name: city_key
+        description: >
+          Foreign key referencing the city dimension.
+
+      - name: station_key
+        description: >
+          Foreign key referencing the monitoring station dimension.
+
+      - name: pollutant_id
+        description: >
+          Foreign key referencing the pollutant dimension.
+
+
+# mart_city_data_completeness
+
+      - name: city_key
+        description: >
+          City dimension identifier for the completeness metrics.
+
+      - name: measurement_availability_pct
+        description: >
+          Percentage of returned station-pollutant records
+          that passed analytical quality checks.
+
+
+# mart_city_pollutant_snapshot
+
+      - name: city_key
+        description: >
+          City dimension identifier for the pollutant summary.
+
+      - name: pollutant_id
+        description: >
+          Pollutant identifier used for city-level aggregation.
+
+      - name: measurement_availability_pct
+        description: >
+          Percentage of station observations for the
+          pollutant that passed analytical quality checks.

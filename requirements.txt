@@ -1,0 +1,5 @@
+requests
+python-dotenv
+tzdata
+boto3
+pyspark==3.5.6

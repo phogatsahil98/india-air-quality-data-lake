@@ -1,0 +1,114 @@
+
+version: 2
+
+models:
+
+  - name: int_cpcb_observation_quality
+
+    description: >
+      Evaluates the quality of each CPCB observation
+      using measurement availability, coordinate validity,
+      timestamp validity and measurement consistency.
+
+    columns:
+
+      - name: observation_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: is_analytically_usable
+        description: >
+          Indicates whether an observation meets all
+          required quality conditions for concentration analysis.
+        data_tests:
+          - not_null
+
+      - name: record_quality_reason
+        description: >
+          Explains why an observation is or is not
+          analytically usable.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - VALID
+                  - MEASUREMENT_UNAVAILABLE
+                  - PARTIAL_MEASUREMENT
+                  - INVALID_MEASUREMENT
+                  - INVALID_COORDINATES
+                  - INVALID_TIMESTAMP
+                  - INCONSISTENT_MEASUREMENTS
+                  - MISSING_NUMERIC_VALUES
+
+  - name: int_cpcb_usable_measurements
+
+    description: >
+      Contains CPCB measurements that passed the
+      intermediate data-quality assessment.
+
+    columns:
+
+      - name: observation_id
+        data_tests:
+          - not_null
+          - unique
+
+      - name: station_key
+        data_tests:
+          - not_null
+
+      - name: pollutant_id
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - CO
+                  - NH3
+                  - NO2
+                  - OZONE
+                  - PM10
+                  - PM2.5
+                  - SO2
+
+      - name: avg_value
+        data_tests:
+          - not_null
+
+      - name: is_analytically_usable
+        data_tests:
+          - not_null
+
+# int_cpcb_observation_quality
+
+      - name: observation_id
+        description: >
+          SHA-256 fingerprint identifying the original
+          CPCB observation record.
+
+
+# int_cpcb_usable_measurements
+
+      - name: observation_id
+        description: >
+          Unique fingerprint identifying the source observation.
+
+      - name: station_key
+        description: >
+          Deterministic identifier for an individual
+          CPCB monitoring station.
+
+      - name: pollutant_id
+        description: >
+          Identifier of the measured atmospheric pollutant.
+
+      - name: avg_value
+        description: >
+          Reported average pollutant measurement from
+          the monitoring station.
+
+      - name: is_analytically_usable
+        description: >
+          Indicates whether the observation passes
+          the configured data-quality requirements.

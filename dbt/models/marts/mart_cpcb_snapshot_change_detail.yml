@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: mart_cpcb_snapshot_change_detail
+    description: >-
+      Gold-level drill-down with one row per candidate station-pollutant entity
+      comparing the latest complete CPCB extraction with the immediately previous
+      extraction.
+    columns:
+      - name: candidate_entity_key
+        description: Candidate station-pollutant key; not an official CPCB identifier.
+        tests:
+          - not_null
+          - unique
+      - name: comparison_status
+        description: Snapshot presence and measurement comparison classification.
+      - name: avg_value_delta
+        description: Latest minus previous average measurement; units are source-defined and not yet verified.

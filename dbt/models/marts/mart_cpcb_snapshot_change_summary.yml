@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: mart_cpcb_snapshot_change_summary
+    description: >-
+      City, state and pollutant-level summary of entity presence and measurement
+      changes between the latest two complete CPCB API snapshots. These are
+      snapshot comparisons, not continuous hourly trends.
+    columns:
+      - name: city
+        description: City label from the latest snapshot when available, otherwise the previous snapshot.
+        tests:
+          - not_null
+      - name: pollutant_id
+        description: CPCB pollutant identifier supplied by the source.
+        tests:
+          - not_null
+      - name: compared_entity_count
+        description: Number of candidate station-pollutant entities represented by this city and pollutant.
+      - name: new_entity_count
+        description: Entities present only in the latest snapshot.
+      - name: missing_entity_count
+        description: Entities present only in the previous snapshot.
+      - name: changed_entity_count
+        description: Entities present in both snapshots with a changed numeric measurement or measurement status.
+      - name: unchanged_entity_count
+        description: Entities present in both snapshots with unchanged numeric measurements and measurement status.
