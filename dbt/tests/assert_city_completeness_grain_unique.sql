@@ -1,22 +1,8 @@
-
-SELECT
-
+select
     city_key,
-
-    observation_date,
-
+    ingestion_date,
     extraction_id,
-
-    COUNT(*) AS record_count
-
-FROM {{ ref('mart_city_data_completeness') }}
-
-GROUP BY
-
-    city_key,
-
-    observation_date,
-
-    extraction_id
-
-HAVING COUNT(*) > 1
+    count(*) as record_count
+from {{ ref('mart_city_data_completeness') }}
+group by city_key, ingestion_date, extraction_id
+having count(*) > 1

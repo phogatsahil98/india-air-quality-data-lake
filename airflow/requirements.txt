@@ -1,0 +1,6 @@
+# Runtime packages for CPCB ingestion and PySpark tasks in the Airflow worker.
+# dbt is installed in a separate /opt/dbt-venv to avoid dependency conflicts.
+boto3
+python-dotenv
+requests
+pyspark==3.5.9

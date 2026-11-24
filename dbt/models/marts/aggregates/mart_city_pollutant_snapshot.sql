@@ -1,131 +1,40 @@
-{{ config(materialized='view') }}
+{{ config(materialized='view', tags=['cpcb', 'current_state', 'gold']) }}
 
-
-SELECT
-
+select
     f.city_key,
-
     c.country,
-
     c.state,
-
     c.city,
-
     f.pollutant_id,
-
     p.pollutant_name,
-
     p.pollutant_category,
-
-    f.observation_date,
-
     f.ingestion_date,
-
     f.extraction_id,
-
-    COUNT(*) AS station_observation_count,
-
-    COUNT_IF(
-        f.is_analytically_usable
-    ) AS usable_observation_count,
-
-    COUNT_IF(
-        NOT f.is_analytically_usable
-    ) AS unusable_observation_count,
-
-    COUNT(
-        DISTINCT f.station_key
-    ) AS reporting_station_count,
-
-    COUNT(
-        DISTINCT CASE
-
-            WHEN f.is_analytically_usable
-                THEN f.station_key
-
-        END
-    ) AS usable_station_count,
-
-    ROUND(
-
-        100.0 * COUNT_IF(
-            f.is_analytically_usable
-        )
-
-/
-NULLIF(COUNT(*), 0),
-
+    max(f.retrieved_at_utc) as retrieved_at_utc,
+    count(*) as station_observation_count,
+    count_if(f.is_analytically_usable) as usable_observation_count,
+    count_if(not f.is_analytically_usable) as unusable_observation_count,
+    count(distinct f.station_key) as reporting_station_count,
+    count(distinct case when f.is_analytically_usable then f.station_key end) as usable_station_count,
+    round(
+        100.0 * count_if(f.is_analytically_usable) / nullif(count(*), 0),
         2
-
-    ) AS measurement_availability_pct,
-
-    ROUND(
-
-        AVG(
-
-            CASE
-
-                WHEN f.is_analytically_usable
-                    THEN f.avg_value
-
-            END
-
-        ),
-
-        2
-
-    ) AS mean_station_avg_value,
-
-    MAX(
-
-        CASE
-
-            WHEN f.is_analytically_usable
-                THEN f.max_value
-
-        END
-
-    ) AS highest_station_max_value,
-
-    MIN(
-
-        CASE
-
-            WHEN f.is_analytically_usable
-                THEN f.min_value
-
-        END
-
-    ) AS lowest_station_min_value
-
-FROM {{ ref('fct_station_pollutant_observation') }} f
-
-INNER JOIN {{ ref('dim_city') }} c
-
-    ON f.city_key = c.city_key
-
-INNER JOIN {{ ref('dim_pollutant') }} p
-
-    ON f.pollutant_id = p.pollutant_id
-
-GROUP BY
-
+    ) as measurement_availability_pct,
+    round(avg(case when f.is_analytically_usable then f.avg_value end), 2) as mean_station_avg_value,
+    max(case when f.is_analytically_usable then f.max_value end) as highest_station_max_value,
+    min(case when f.is_analytically_usable then f.min_value end) as lowest_station_min_value
+from {{ ref('fct_station_pollutant_observation') }} as f
+inner join {{ ref('dim_city') }} as c
+    on f.city_key = c.city_key
+inner join {{ ref('dim_pollutant') }} as p
+    on f.pollutant_id = p.pollutant_id
+group by
     f.city_key,
-
     c.country,
-
     c.state,
-
     c.city,
-
     f.pollutant_id,
-
     p.pollutant_name,
-
     p.pollutant_category,
-
-    f.observation_date,
-
     f.ingestion_date,
-
     f.extraction_id

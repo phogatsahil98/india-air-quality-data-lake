@@ -1,22 +1,41 @@
-
 version: 2
 
 sources:
-
   - name: cpcb_silver
-
-    description: >
-      Cleaned CPCB station-level pollutant observations
-      produced by our PySpark Bronze-to-Silver pipeline.
-
+    description: >-
+      CPCB Silver datasets curated from immutable S3 Bronze extraction snapshots.
+      The historical snapshot table is the active analytical source. The original
+      single-snapshot table remains registered for legacy reproducibility only.
     database: awsdatacatalog
-
     schema: india_aqi_lake
-
     tables:
+      - name: cpcb_observation_snapshots
+        description: >-
+          Active extraction-aware Silver table. Each row is retained at the
+          grain of one extraction and one exact source record after within-run
+          deduplication. Records from separate extractions are not deduplicated.
+        columns:
+          - name: extraction_id
+            description: UTC extraction identifier in YYYYMMDDTHHMMSSZ format.
+          - name: retrieved_at_utc
+            description: UTC timestamp when the API snapshot was retrieved.
+          - name: ingestion_date
+            description: UTC retrieval date and Glue partition key.
+          - name: source_last_update_raw
+            description: Original CPCB last_update text; source timezone semantics are not inferred.
+          - name: candidate_station_key
+            description: SHA-256 key from normalized country, state, city and station labels; not an official CPCB ID.
+          - name: candidate_entity_key
+            description: SHA-256 key from candidate_station_key and pollutant_id.
+          - name: source_record_hash
+            description: SHA-256 fingerprint of the original source fields before normalization.
+          - name: measurement_status
+            description: AVAILABLE, UNAVAILABLE, PARTIAL or INVALID_NUMERIC.
+          - name: coordinate_status
+            description: VALID or INVALID after numeric and geographic range validation.
 
       - name: cpcb_observations
-
-        description: >
-          Deduplicated and validated CPCB observations
-          stored as partitioned Parquet files in Amazon S3.
+        description: >-
+          Legacy single-extraction Silver table from the initial bootstrap. It
+          is retained in Glue/S3 for reproducibility and is not used by active
+          dbt models after the canonical-source migration.

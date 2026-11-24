@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,6 +189,80 @@ def make_local_inventory(run_dir: Path, extraction_id: str, prefix: str) -> tupl
     return inventory, total_records, sorted(api_totals)
 
 
+
+def validate_page_inventory(
+    inventory: list[dict[str, Any]],
+    total_records: int,
+    api_totals: list[int],
+) -> dict[str, Any]:
+    """Fail closed when page totals or offsets indicate an incomplete extraction."""
+    if not inventory:
+        raise RuntimeError("The extraction contains no API JSON pages.")
+
+    if len(api_totals) > 1:
+        raise RuntimeError(
+            "CPCB reported inconsistent total counts across pages: "
+            f"{api_totals}. Refusing to publish an immutable Bronze manifest."
+        )
+
+    api_total = api_totals[0] if api_totals else None
+    if api_total is not None and total_records != api_total:
+        raise RuntimeError(
+            f"Incomplete extraction: API total is {api_total}, "
+            f"but local pages contain {total_records} records."
+        )
+
+    # Prefer the explicit offset returned by the API. If it is absent, the
+    # extractor's deterministic page_offset_<offset>.json filename is used.
+    offsets: list[tuple[int, int, str]] = []
+    for item in inventory:
+        offset = item.get("offset")
+        if offset is None:
+            match = re.fullmatch(
+                r"page_offset_(\d+)\.json",
+                Path(item["local_relative_path"]).name,
+            )
+            if not match:
+                raise RuntimeError(
+                    "Could not validate page order: an API page has no returned offset "
+                    "and does not use the expected page_offset_<offset>.json filename."
+                )
+            offset = int(match.group(1))
+        offsets.append((int(offset), int(item["record_count"]), item["local_relative_path"]))
+
+    offsets_validated = False
+    if offsets:
+        offsets.sort(key=lambda value: value[0])
+        expected_offset = 0
+        for actual_offset, record_count, filename in offsets:
+            if actual_offset != expected_offset:
+                raise RuntimeError(
+                    f"Non-contiguous API pagination at {filename}: expected offset "
+                    f"{expected_offset}, found {actual_offset}."
+                )
+            expected_offset += record_count
+        offsets_validated = True
+        if expected_offset != total_records:
+            raise RuntimeError(
+                f"Page offsets cover {expected_offset} records, but inventory contains "
+                f"{total_records}."
+            )
+
+    if api_total is None:
+        raise RuntimeError(
+            "The API total was not present in page responses. Refusing to mark this "
+            "extraction complete; verify the source response before uploading."
+        )
+
+    return {
+        "status": "PASSED",
+        "api_total": api_total,
+        "raw_record_count": total_records,
+        "record_count_matches_api_total": total_records == api_total,
+        "page_offsets_validated": offsets_validated,
+        "page_count": len(inventory),
+    }
+
 def compare_inventory(existing_manifest: dict[str, Any], inventory: list[dict[str, Any]], extraction_id: str) -> bool:
     if existing_manifest.get("extraction_id") != extraction_id:
         return False
@@ -262,8 +337,11 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    if len(api_totals) > 1:
-        print(f"WARNING: Page responses report inconsistent API totals: {api_totals}")
+    try:
+        completeness = validate_page_inventory(inventory, total_records, api_totals)
+    except RuntimeError as exc:
+        print(f"ERROR: Extraction completeness validation failed: {exc}", file=sys.stderr)
+        return 2
 
     print("=" * 76)
     print("CPCB DYNAMIC BRONZE UPLOAD")
@@ -273,7 +351,9 @@ def main() -> int:
     print(f"Local folder  : {run_dir}")
     print(f"JSON pages    : {len(inventory)}")
     print(f"Raw records   : {total_records}")
-    print(f"API total(s)  : {api_totals if api_totals else 'not present in response'}")
+    print(f"API total(s)  : {api_totals}")
+    print(f"Completeness  : {completeness['status']}")
+    print(f"Offsets valid : {completeness['page_offsets_validated']}")
     print(f"S3 destination: s3://{args.bucket}/{prefix}/")
 
     for item in inventory:
@@ -337,19 +417,26 @@ def main() -> int:
             "page_count": len(inventory),
             "raw_record_count": total_records,
             "api_total_values_reported": api_totals,
+            "completeness_validation": completeness,
             "files": inventory,
         }
 
         if existing_manifest is None:
             manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
+            manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
             s3_client.put_object(
                 Bucket=args.bucket,
                 Key=manifest_key,
                 Body=manifest_bytes,
                 ContentType="application/json",
                 ServerSideEncryption="AES256",
+                Metadata={"sha256": manifest_sha, "extraction-id": args.extraction_id},
             )
-            manifest_action = "CREATED"
+            if remote_sha256(s3_client, args.bucket, manifest_key) != manifest_sha:
+                raise RuntimeError(
+                    f"Manifest checksum verification failed for s3://{args.bucket}/{manifest_key}."
+                )
+            manifest_action = "CREATED_AND_VERIFIED"
         else:
             manifest_action = "EXISTING_VALIDATED"
 

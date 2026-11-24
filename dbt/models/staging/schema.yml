@@ -1,77 +1,94 @@
-
 version: 2
 
 models:
-
-  - name: stg_cpcb_observations
-
-    description: >
-      Standardized staging model for CPCB air quality
-      observations from Indian monitoring stations.
-
+  - name: stg_cpcb_observation_snapshots
+    description: >-
+      Canonical typed staging view over all extraction-aware CPCB Silver rows.
+      The model retains every extraction independently. It exposes compatibility
+      aliases for the current-state star schema while keeping source retrieval
+      time distinct from the source-provided last_update text.
     columns:
-
-      - name: observation_id
-        description: SHA-256 fingerprint of the original observation.
-        data_tests:
-          - not_null
-          - unique
-
-      - name: station_key
-        description: Stable identifier for the monitoring station.
-        data_tests:
-          - not_null
-
+      - name: extraction_id
+        description: Immutable UTC identifier for one API extraction.
+        data_tests: [not_null]
+      - name: retrieved_at_utc
+        description: UTC retrieval timestamp derived from extraction_id.
+        data_tests: [not_null]
+      - name: ingestion_date
+        description: UTC retrieval date and Glue partition key; not an observation date.
+        data_tests: [not_null]
+      - name: source_last_update_raw
+        description: CPCB last_update value preserved as text; timezone semantics are not inferred.
+      - name: source_last_update
+        description: Compatibility alias of source_last_update_raw.
+      - name: country
+        description: Trimmed source country label.
+        data_tests: [not_null]
+      - name: state
+        description: Trimmed source state or union-territory label.
+        data_tests: [not_null]
       - name: city
-        description: Original CPCB city name.
-        data_tests:
-          - not_null
-
+        description: Original city label, trimmed but otherwise retained.
+        data_tests: [not_null]
+      - name: city_normalized
+        description: Lowercase, trimmed city label used for consistent city-key matching.
+        data_tests: [not_null]
+      - name: station
+        description: Trimmed monitoring-station display name.
+        data_tests: [not_null]
+      - name: candidate_station_key
+        description: Candidate hash derived from normalized country, state, city and station labels; not an official CPCB ID.
+        data_tests: [not_null]
+      - name: station_key
+        description: Compatibility alias of candidate_station_key.
+        data_tests: [not_null]
+      - name: candidate_entity_key
+        description: Candidate station-pollutant hash; changes if the source station labels change.
+        data_tests: [not_null]
+      - name: observation_id
+        description: Compatibility alias of source_record_hash; may repeat across different extraction IDs.
+        data_tests: [not_null]
+      - name: source_record_hash
+        description: SHA-256 fingerprint of original CPCB fields before normalization.
+        data_tests: [not_null]
       - name: pollutant_id
-        description: CPCB pollutant identifier.
+        description: Uppercase CPCB pollutant identifier.
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values:
-                  - CO
-                  - NH3
-                  - NO2
-                  - OZONE
-                  - PM10
-                  - PM2.5
-                  - SO2
-
+                values: ['CO', 'NH3', 'NO2', 'OZONE', 'PM10', 'PM2.5', 'SO2']
+      - name: latitude
+        description: Parsed latitude in decimal degrees.
+      - name: longitude
+        description: Parsed longitude in decimal degrees.
+      - name: coordinate_status
+        description: VALID or INVALID based on numeric parsing and geographic ranges.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['VALID', 'INVALID']
+      - name: min_value
+        description: Parsed minimum pollutant value; units are not present in the inspected source schema.
+      - name: max_value
+        description: Parsed maximum pollutant value; units are not present in the inspected source schema.
+      - name: avg_value
+        description: Parsed average pollutant value; units are not present in the inspected source schema.
       - name: measurement_status
-        description: Availability and validity of pollutant measurements.
-        data_tests:
-          - accepted_values:
-              arguments:
-                values:
-                  - AVAILABLE
-                  - UNAVAILABLE
-                  - PARTIAL
-                  - INVALID
-
-      - name: coordinate_status
-        data_tests:
-          - accepted_values:
-              arguments:
-                values:
-                  - VALID
-                  - MISSING
-                  - INVALID
-
-      - name: observation_date
+        description: AVAILABLE, UNAVAILABLE, PARTIAL or INVALID_NUMERIC.
         data_tests:
           - not_null
-      - name: coordinate_status
-        description: >
-          Indicates whether the monitoring station's
-          latitude and longitude are present, numeric,
-          and within valid geographic ranges.
-
-      - name: observation_date
-        description: >
-          Calendar date derived from the original CPCB
-          observation timestamp.
+          - accepted_values:
+              arguments:
+                values: ['AVAILABLE', 'UNAVAILABLE', 'PARTIAL', 'INVALID_NUMERIC']
+      - name: source_occurrence_count
+        description: Number of exact source-record occurrences within this extraction before deduplication.
+      - name: duplicate_excess_count
+        description: Number of repeated occurrences removed within this extraction.
+      - name: source_pages
+        description: Bronze page filenames containing the exact source record.
+      - name: source_page_count
+        description: Number of Bronze pages containing the exact source record.
+      - name: ingested_at_utc
+        description: Timestamp when the local PySpark Silver transformation created this row.

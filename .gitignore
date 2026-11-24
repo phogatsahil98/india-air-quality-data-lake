@@ -47,3 +47,26 @@ Thumbs.db
 # Temporary files
 *.tmp
 approach.txt
+*.zip
+.migration_backups/
+**/.pytest_cache/
+**/.ruff_cache/
+**/profiles.yml
+
+
+# for dashboard 
+.venv-dashboard/
+dashboard/.streamlit/secrets.toml
+**/__pycache__/
+*.pyc
+
+$env:AWS_PROFILE = "india-aqi-admin"
+$env:AWS_REGION = "ap-south-1"
+$env:ATHENA_WORKGROUP = "india-aqi-workgroup"
+$env:ATHENA_CATALOG = "AwsDataCatalog"
+$env:ATHENA_DATABASE = "india_aqi_dbt_dev"data/
+.venv*/
+**/secrets.toml
+data/
+**/logs/
+.streamlit/secrets.toml

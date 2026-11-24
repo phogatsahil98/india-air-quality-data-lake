@@ -1,53 +1,58 @@
-# CPCB snapshot analytics dbt extension
+# dbt — India Air Quality Analytics
 
-This extension adds a snapshot comparison intermediate model and two Gold views.
-It does not replace or modify the existing CPCB models and marts.
+## Canonical source
 
-## Files to copy
+`cpcb_observation_snapshots` is the active dbt source. It contains all retained
+extraction-aware CPCB Silver snapshots. The former `cpcb_observations` Glue
+ table is retained as a legacy bootstrap artifact and is not referenced by
+active dbt models.
 
-Copy the bundle's `models/intermediate/`, `models/marts/`, and `tests/` contents
-into the same directories in the existing `dbt/` project.
+## Model flow
 
-## Run from the dbt project directory
+```text
+cpcb_observation_snapshots (Glue source; all extractions)
+  ├── stg_cpcb_observation_snapshots (typed historical staging)
+  │    ├── int_cpcb_latest_snapshot (one latest complete extraction)
+  │    │    └── int_cpcb_observation_quality (current-state quality assessment)
+  │    │         ├── int_cpcb_usable_measurements
+  │    │         ├── dim_city / dim_station / dim_pollutant
+  │    │         └── fct_station_pollutant_observation
+  │    │              ├── mart_city_pollutant_snapshot
+  │    │              └── mart_city_data_completeness
+  │    └── int_cpcb_snapshot_entity_comparison (latest vs previous extraction)
+  │         ├── mart_cpcb_snapshot_change_detail
+  │         └── mart_cpcb_snapshot_change_summary
+```
+
+The current-state star schema uses the latest complete extraction as a whole.
+The snapshot-comparison models read all retained extractions. The model does
+not carry forward station-pollutant entities missing from the latest response.
+
+## Time semantics
+
+- `retrieved_at_utc` and `ingestion_date` describe our extraction/retrieval.
+- `source_last_update_raw` preserves the CPCB `last_update` string as received.
+- No timezone or source observation-period semantics are inferred from the raw
+  timestamp text.
+- These snapshots do not constitute a continuous hourly time series.
+- This project does not calculate official CPCB AQI.
+
+## Run
+
+Use the project's `.venv-dbt` environment on Windows or the dedicated
+`/opt/dbt-venv` inside the Airflow worker. Do not share dbt `target/` or partial
+parse artifacts between Windows and Linux. Airflow runs dbt with a Linux-only
+target path and `--no-partial-parse`.
 
 ```powershell
+cd dbt
 dbt parse
-dbt ls --select int_cpcb_snapshot_entity_comparison mart_cpcb_snapshot_change_detail mart_cpcb_snapshot_change_summary
-
-dbt run --select int_cpcb_snapshot_entity_comparison mart_cpcb_snapshot_change_detail mart_cpcb_snapshot_change_summary --fail-fast
-dbt test --select int_cpcb_snapshot_entity_comparison mart_cpcb_snapshot_change_detail mart_cpcb_snapshot_change_summary
+dbt build --fail-fast
+dbt docs generate
 ```
 
-If the adapter's graph selection does not include singular tests, run the three
-explicitly:
+## Retired single-snapshot artifacts
 
-```powershell
-dbt test --select assert_cpcb_snapshot_comparison_has_two_extractions assert_cpcb_snapshot_comparison_status_reconciles assert_cpcb_snapshot_availability_change_is_common_entity
-```
-
-## Model behavior
-
-- `int_cpcb_snapshot_entity_comparison` compares the latest and immediately
-  previous complete extractions, ranking runs by `retrieved_at_utc` and then
-  `extraction_id`.
-- The join uses `candidate_entity_key` and is a full outer join so newly appearing
-  and missing entities are preserved.
-- `CHANGED` is based on numeric measurement values or measurement status. The
-  source `last_update` string is not itself treated as a measurement change.
-- Average-value deltas are only calculated when both values are non-null. Percent
-  changes are omitted when the previous value is zero.
-- Station and entity keys are candidate keys derived from source labels, not
-  official CPCB station identifiers.
-- The summary and detail marts are views and do not write new Parquet datasets.
-- Two source snapshots do not establish a continuous hourly time series, and
-  these models do not calculate official CPCB AQI.
-- Measurement units have not yet been verified from the source metadata; do not
-  interpret cross-pollutant averages or compare magnitudes across pollutants.
-
-## Expected current two-snapshot reconciliation
-
-The comparison has one output row per unioned candidate entity key. Based on the
-prior source comparison, the expected classification is 390 new, 418 missing,
-2,899 changed, and 359 unchanged entities. 209 common entities changed
-measurement availability. These are validation targets for the current two
-snapshots; future extractions will change them.
+`stg_cpcb_observations` and source `cpcb_silver.cpcb_observations` were used by
+the original one-time bootstrap path. The staging model is archived outside
+`models/`; the Glue table is left intact until a separate retention decision.

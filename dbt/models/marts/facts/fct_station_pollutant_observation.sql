@@ -1,90 +1,43 @@
-{{ config(materialized='view') }}
+{{ config(materialized='view', tags=['cpcb', 'current_state', 'gold']) }}
 
-
-WITH observations AS (
-
-    SELECT *
-
-    FROM {{ ref('int_cpcb_observation_quality') }}
-
+with observations as (
+    select *
+    from {{ ref('int_cpcb_observation_quality') }}
 ),
-
-enriched_observations AS (
-
-    SELECT
-
+enriched_observations as (
+    select
         *,
-
-        CONCAT(
-
-            LOWER(TRIM(country)),
-            '|',
-            LOWER(TRIM(state)),
-            '|',
+        concat(
+            lower(trim(country)), '|',
+            lower(trim(state)), '|',
             city_normalized
-
-        ) AS derived_city_key
-
-    FROM observations
-
+        ) as derived_city_key
+    from observations
 )
-
-SELECT
-
-    CONCAT(
-        o.extraction_id,
-        '|',
-        o.observation_id
-    ) AS fact_observation_key,
-
+select
+    concat(o.extraction_id, '|', o.observation_id) as fact_observation_key,
     o.observation_id,
-
     c.city_key,
-
     s.station_key,
-
     p.pollutant_id,
-
-    o.observation_date,
-
     o.ingestion_date,
-
-    o.source_last_update,
-
+    o.retrieved_at_utc,
+    o.source_last_update_raw,
     o.extraction_id,
-
     o.min_value,
-
     o.max_value,
-
     o.avg_value,
-
     o.measurement_status,
-
     o.record_quality_reason,
-
     o.is_analytically_usable,
-
     o.coordinate_status,
-
-    o.timestamp_parse_status,
-
     o.range_consistency_status,
-
     o.source_occurrence_count,
-
     o.source_page_count
-
-FROM enriched_observations o
-
-LEFT JOIN {{ ref('dim_city') }} c
-
-    ON o.derived_city_key = c.city_key
-
-LEFT JOIN {{ ref('dim_station') }} s
-
-    ON o.station_key = s.station_key
-
-LEFT JOIN {{ ref('dim_pollutant') }} p
-
-    ON o.pollutant_id = p.pollutant_id
+from enriched_observations as o
+left join {{ ref('dim_city') }} as c
+    on o.derived_city_key = c.city_key
+left join {{ ref('dim_station') }} as s
+    on o.station_key = s.station_key
+left join {{ ref('dim_pollutant') }} as p
+    on o.pollutant_id = p.pollutant_id

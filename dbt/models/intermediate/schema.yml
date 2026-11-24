@@ -1,34 +1,28 @@
-
 version: 2
 
 models:
-
   - name: int_cpcb_observation_quality
-
-    description: >
-      Evaluates the quality of each CPCB observation
-      using measurement availability, coordinate validity,
-      timestamp validity and measurement consistency.
-
+    description: >-
+      Quality assessment of records in the latest complete CPCB extraction.
+      This is the canonical current-state quality layer. Source last_update is
+      preserved as text and is not used as a timezone-aware observation time.
     columns:
-
       - name: observation_id
+        description: Source record fingerprint for the latest extraction.
         data_tests:
           - not_null
           - unique
-
-      - name: is_analytically_usable
-        description: >
-          Indicates whether an observation meets all
-          required quality conditions for concentration analysis.
+      - name: range_consistency_status
+        description: NOT_EVALUATED for unavailable or incomplete measurements; otherwise CONSISTENT or INCONSISTENT based on min <= avg <= max.
         data_tests:
           - not_null
-
+          - accepted_values:
+              arguments:
+                values: ['NOT_EVALUATED', 'CONSISTENT', 'INCONSISTENT']
       - name: record_quality_reason
-        description: >
-          Explains why an observation is or is not
-          analytically usable.
+        description: Primary reason a record is or is not suitable for concentration analysis.
         data_tests:
+          - not_null
           - accepted_values:
               arguments:
                 values:
@@ -37,78 +31,29 @@ models:
                   - PARTIAL_MEASUREMENT
                   - INVALID_MEASUREMENT
                   - INVALID_COORDINATES
-                  - INVALID_TIMESTAMP
                   - INCONSISTENT_MEASUREMENTS
                   - MISSING_NUMERIC_VALUES
+      - name: is_analytically_usable
+        description: True only when measurements, coordinates and range consistency pass configured checks.
+        data_tests: [not_null]
 
   - name: int_cpcb_usable_measurements
-
-    description: >
-      Contains CPCB measurements that passed the
-      intermediate data-quality assessment.
-
+    description: >-
+      Latest-extraction measurements that passed the configured data-quality rules.
     columns:
-
       - name: observation_id
         data_tests:
           - not_null
           - unique
-
       - name: station_key
-        data_tests:
-          - not_null
-
+        data_tests: [not_null]
       - name: pollutant_id
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values:
-                  - CO
-                  - NH3
-                  - NO2
-                  - OZONE
-                  - PM10
-                  - PM2.5
-                  - SO2
-
+                values: ['CO', 'NH3', 'NO2', 'OZONE', 'PM10', 'PM2.5', 'SO2']
       - name: avg_value
-        data_tests:
-          - not_null
-
+        data_tests: [not_null]
       - name: is_analytically_usable
-        data_tests:
-          - not_null
-
-# int_cpcb_observation_quality
-
-      - name: observation_id
-        description: >
-          SHA-256 fingerprint identifying the original
-          CPCB observation record.
-
-
-# int_cpcb_usable_measurements
-
-      - name: observation_id
-        description: >
-          Unique fingerprint identifying the source observation.
-
-      - name: station_key
-        description: >
-          Deterministic identifier for an individual
-          CPCB monitoring station.
-
-      - name: pollutant_id
-        description: >
-          Identifier of the measured atmospheric pollutant.
-
-      - name: avg_value
-        description: >
-          Reported average pollutant measurement from
-          the monitoring station.
-
-      - name: is_analytically_usable
-        description: >
-          Indicates whether the observation passes
-          the configured data-quality requirements.
+        data_tests: [not_null]

@@ -1,26 +1,9 @@
-
-SELECT
-
+select
     city_key,
-
     pollutant_id,
-
-    observation_date,
-
+    ingestion_date,
     extraction_id,
-
-    COUNT(*) AS record_count
-
-FROM {{ ref('mart_city_pollutant_snapshot') }}
-
-GROUP BY
-
-    city_key,
-
-    pollutant_id,
-
-    observation_date,
-
-    extraction_id
-
-HAVING COUNT(*) > 1
+    count(*) as record_count
+from {{ ref('mart_city_pollutant_snapshot') }}
+group by city_key, pollutant_id, ingestion_date, extraction_id
+having count(*) > 1

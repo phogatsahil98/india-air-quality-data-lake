@@ -1,64 +1,37 @@
-{{ config( materialized='view' ) }}
+{{ config(materialized='view', tags=['cpcb', 'current_state', 'quality']) }}
 
-
-WITH observations AS (
-
-    SELECT *
-
-    FROM {{ ref('stg_cpcb_observations') }}
-
+with latest_observations as (
+    select *
+    from {{ ref('int_cpcb_latest_snapshot') }}
 ),
-
-quality_assessment AS (
-
-    SELECT
-
+range_assessment as (
+    select
         *,
-
-        CASE
-
-            WHEN measurement_status = 'UNAVAILABLE'
-                THEN 'MEASUREMENT_UNAVAILABLE'
-
-            WHEN measurement_status = 'PARTIAL'
-                THEN 'PARTIAL_MEASUREMENT'
-
-            WHEN measurement_status = 'INVALID'
-                THEN 'INVALID_MEASUREMENT'
-
-            WHEN coordinate_status != 'VALID'
-                THEN 'INVALID_COORDINATES'
-
-            WHEN timestamp_parse_status != 'VALID'
-                THEN 'INVALID_TIMESTAMP'
-
-            WHEN range_consistency_status != 'CONSISTENT'
-                THEN 'INCONSISTENT_MEASUREMENTS'
-
-            WHEN min_value IS NULL
-                OR max_value IS NULL
-                OR avg_value IS NULL
-                THEN 'MISSING_NUMERIC_VALUES'
-
-            ELSE 'VALID'
-
-        END AS record_quality_reason
-
-    FROM observations
-
+        case
+            when measurement_status <> 'AVAILABLE'
+              or min_value is null or avg_value is null or max_value is null then 'NOT_EVALUATED'
+            when min_value <= avg_value and avg_value <= max_value then 'CONSISTENT'
+            else 'INCONSISTENT'
+        end as range_consistency_status
+    from latest_observations
+),
+quality_assessment as (
+    select
+        *,
+        case
+            when measurement_status = 'UNAVAILABLE' then 'MEASUREMENT_UNAVAILABLE'
+            when measurement_status = 'PARTIAL' then 'PARTIAL_MEASUREMENT'
+            when measurement_status = 'INVALID_NUMERIC' then 'INVALID_MEASUREMENT'
+            when coordinate_status <> 'VALID' then 'INVALID_COORDINATES'
+            when min_value is null or max_value is null or avg_value is null then 'MISSING_NUMERIC_VALUES'
+            when range_consistency_status = 'INCONSISTENT' then 'INCONSISTENT_MEASUREMENTS'
+            else 'VALID'
+        end as record_quality_reason
+    from range_assessment
 )
-
-SELECT
-
+select
     *,
-
-    CASE
-
-        WHEN record_quality_reason = 'VALID'
-            THEN TRUE
-
-        ELSE FALSE
-
-    END AS is_analytically_usable
-
-FROM quality_assessment
+    case when record_quality_reason = 'VALID' then true else false end as is_analytically_usable,
+    case when measurement_status = 'AVAILABLE' then true else false end as is_measurement_available,
+    case when coordinate_status = 'VALID' then true else false end as is_coordinate_valid
+from quality_assessment

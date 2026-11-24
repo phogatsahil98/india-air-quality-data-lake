@@ -1,74 +1,64 @@
-
 {% docs __overview__ %}
 
 # India Air Quality Analytics
 
 ## Project objective
 
-Build an AWS-based data lakehouse using government
-air-quality observations published through CPCB and
-the Government of India's Open Government Data portal.
+Build an AWS data lakehouse for CPCB / data.gov.in station-level pollutant
+snapshots, preserving each extraction and producing reproducible analytical
+views.
 
 ## Architecture
 
-CPCB API → Python ingestion → Amazon S3 Bronze
-→ PySpark → Amazon S3 Silver
-→ dbt → Gold analytical models
-→ Amazon Athena → Analytics dashboard
+CPCB API → Python extraction → S3 Bronze JSON → PySpark → S3 Silver Parquet
+→ Glue Data Catalog → Athena → dbt → current-state and snapshot-comparison marts.
+Airflow orchestrates extraction, storage, partition registration and dbt builds.
+
+## Canonical dbt source and model flow
+
+The active source is `cpcb_observation_snapshots`, which retains records from
+all extractions. `stg_cpcb_observation_snapshots` is the canonical staging model.
+`int_cpcb_latest_snapshot` selects the latest complete extraction as a whole.
+The current-state quality layer and star schema are built from that latest
+snapshot. Historical comparison models read all snapshots to compare the latest
+and immediately preceding extraction.
 
 ## Data layers
 
 ### Bronze
 
-Original CPCB API responses stored as JSON in Amazon S3.
+Immutable source API page JSON and extraction manifests in S3.
 
 ### Silver
 
-PySpark-processed observations stored as Parquet.
-
-Includes:
-- Numeric type conversion
-- Missing-value standardization
-- Exact duplicate removal
-- Timestamp validation
-- Coordinate validation
-- Source provenance
+Extraction-aware Parquet. Exact duplicates are removed within each extraction;
+records from separate extractions remain distinct. Measurement and coordinate
+status are retained with source provenance.
 
 ### Gold
 
-Analytics-ready dimensions, fact tables and aggregate marts.
-
-Includes:
-- City dimension
-- Monitoring station dimension
-- Pollutant dimension
-- Station-pollutant observation fact
-- City-pollutant snapshot mart
-- City data-completeness mart
+Current-state dimensions, fact and city-level summary marts, alongside separate
+entity-level and aggregated snapshot-change marts.
 
 ## Important analytical distinctions
 
-Pollutant concentration and Air Quality Index (AQI)
-are different measurements.
+`retrieved_at_utc` describes when our pipeline fetched a snapshot. The original
+CPCB `last_update` is preserved as raw text because its timezone and exact
+semantics have not been independently established. `ingestion_date` is the
+retrieval-date partition, not an observation date.
 
-The current source snapshot contains one observation
-timestamp per station-pollutant record. It does not
-provide sufficient historical data for seasonal
-trend analysis or official hourly AQI reconstruction.
-
-AQI calculations will be implemented only after
-validating pollutant units, CPCB breakpoints and
-required temporal averaging windows.
+Pollutant concentration and official CPCB AQI are different. The inspected
+source schema has no explicit measurement-units field and these snapshots do
+not provide a continuous hourly history. The project therefore does not claim
+official AQI calculation or seasonal/hourly trend reconstruction.
 
 ## Technology stack
 
-- Python
-- Apache Spark / PySpark
+- Python and PySpark
 - Amazon S3
 - AWS Glue Data Catalog
 - Amazon Athena
-- dbt Core
-- dbt-athena
-- Apache Airflow
+- dbt Core and dbt-athena
+- Apache Airflow with CeleryExecutor
 
 {% enddocs %}

@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Build a consolidated, extraction-aware CPCB historical Silver dataset.
 
-This is a one-time bootstrap builder for the currently available CPCB extracts.
+Build an extraction-aware CPCB Silver dataset for one or more explicit source runs.
 It downloads immutable Bronze JSON pages from S3, validates them, removes exact
 record duplicates *within each extraction only*, and writes a local Parquet
 Silver dataset partitioned by our ingestion date.
 
 It does NOT upload the Parquet files to S3 or alter any existing Silver data.
 
-Default source extractions:
-    20261116T194631Z
-    20261120T170816Z
-
 S3 Bronze layout:
     s3://<bucket>/bronze/cpcb/snapshots/extraction_id=<ID>/data/*.json
     s3://<bucket>/bronze/cpcb/snapshots/extraction_id=<ID>/_metadata/manifest.json
 
 Local output:
-    data/processed/historical_silver/cpcb_observation_snapshots/
+    data/processed/<chosen-build-directory>/
+
+Safety:
+    Recursive output deletion is restricted to a descendant of data/processed.
+    This script requires explicit extraction IDs; it has no stale snapshot defaults.
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ from botocore.exceptions import ClientError, ProfileNotFound
 DEFAULT_BUCKET = "india-aqi-lake-933139321496-ap-south-1"
 DEFAULT_REGION = "ap-south-1"
 DEFAULT_PROFILE = "india-aqi-admin"
-DEFAULT_EXTRACTIONS = ["20261116T194631Z", "20261120T170816Z"]
 BRONZE_ROOT = "bronze/cpcb/snapshots"
 EXPECTED_SOURCE_FIELDS = [
     "country",
@@ -67,9 +66,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extraction-ids",
         nargs="+",
-        default=DEFAULT_EXTRACTIONS,
+        required=True,
         help=(
-            "One or more extraction IDs. Defaults to the 16-Nov and 20-Nov 2026 runs. "
+            "One or more explicit extraction IDs to process. "
             "Example: 20261116T194631Z 20261120T170816Z"
         ),
     )
@@ -86,15 +85,80 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=Path("data/processed/historical_silver/cpcb_observation_snapshots"),
-        help="New local Parquet output directory. It must not already exist.",
+        help="Local Parquet output directory under data/processed.",
     )
     parser.add_argument(
         "--overwrite-output",
         action="store_true",
-        help="Delete and rebuild only the specified local output directory.",
+        help="Delete and rebuild only the specified generated output directory under data/processed.",
+    )
+    parser.add_argument(
+        "--output-partitions",
+        type=int,
+        default=4,
+        help="Number of Spark output partitions before writing Parquet (default: 4).",
     )
     return parser.parse_args()
 
+
+
+def prepare_output_directory(output_dir: Path, *, overwrite: bool) -> Path:
+    """Validate the generated output path and optionally remove a prior build.
+
+    Deletion is limited to descendants of this repository's data/processed
+    directory. The root itself, paths outside it, and symlink targets are never
+    eligible for recursive deletion.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    allowed_roots = (
+        (repo_root / "data" / "processed" / "historical_silver").resolve(),
+        (repo_root / "data" / "processed" / "airflow_runs").resolve(),
+    )
+
+    if output_dir.is_symlink():
+        raise ValueError("Output directory must not be a symbolic link.")
+
+    target = output_dir.resolve()
+    matched_root = None
+    for allowed_root in allowed_roots:
+        try:
+            relative = target.relative_to(allowed_root)
+            if relative.parts:
+                matched_root = allowed_root
+                break
+        except ValueError:
+            continue
+
+    if matched_root is None:
+        roots = ", ".join(str(path) for path in allowed_roots)
+        raise ValueError(
+            f"Output path must be a child of one of the generated build roots ({roots}); "
+            f"refusing unsafe path {target}."
+        )
+
+    # Refuse symlinked build roots so a repository-local path cannot redirect
+    # recursive deletion to an external directory.
+    raw_allowed_roots = (
+        repo_root / "data" / "processed" / "historical_silver",
+        repo_root / "data" / "processed" / "airflow_runs",
+    )
+    if any(path.is_symlink() for path in raw_allowed_roots):
+        raise ValueError("Generated build roots must not be symbolic links.")
+
+    if target.exists():
+        if not target.is_dir():
+            raise ValueError(f"Output path exists but is not a directory: {target}")
+        if not overwrite:
+            raise FileExistsError(
+                f"Output directory already exists: {target}. Choose a new path or "
+                "use --overwrite-output for a generated directory under data/processed."
+            )
+        shutil.rmtree(target)
+
+    # Create only the parent. Spark's errorifexists write mode must see a
+    # non-existent target directory or it will correctly refuse the write.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 def parse_extraction_time(extraction_id: str) -> datetime:
     if not re.fullmatch(r"\d{8}T\d{6}Z", extraction_id):
@@ -200,10 +264,38 @@ def download_extraction(
             f"Manifest extraction_id mismatch for {extraction_id}: "
             f"found {manifest.get('extraction_id')!r}."
         )
+    completeness = manifest.get("completeness_validation")
+    if completeness is not None:
+        if not isinstance(completeness, dict) or completeness.get("status") != "PASSED":
+            raise RuntimeError(
+                f"Bronze extraction {extraction_id} does not have a passed completeness validation."
+            )
+        if completeness.get("record_count_matches_api_total") is not True:
+            raise RuntimeError(
+                f"Bronze extraction {extraction_id} record count does not match the API total."
+            )
 
     keys = list_data_keys(s3, bucket, data_prefix)
     if not keys:
         raise RuntimeError(f"No JSON page files found at s3://{bucket}/{data_prefix}")
+
+    manifest_files = manifest.get("files")
+    if not isinstance(manifest_files, list) or not manifest_files:
+        raise RuntimeError(
+            f"Bronze manifest for {extraction_id} has no valid files inventory."
+        )
+    manifest_keys = {
+        str(item.get("s3_key"))
+        for item in manifest_files
+        if isinstance(item, dict) and item.get("s3_key")
+    }
+    if len(manifest_keys) != len(manifest_files) or manifest_keys != set(keys):
+        missing = sorted(set(keys) - manifest_keys)
+        stale = sorted(manifest_keys - set(keys))
+        raise RuntimeError(
+            f"Bronze manifest inventory mismatch for {extraction_id}. "
+            f"Missing from manifest={missing[:5]}, missing from S3={stale[:5]}."
+        )
 
     expected_pages = manifest.get("page_count")
     if expected_pages is not None and int(expected_pages) != len(keys):
@@ -211,13 +303,29 @@ def download_extraction(
             f"Page-count mismatch for {extraction_id}: manifest={expected_pages}, S3={len(keys)}."
         )
 
-    # The dynamic uploader stores per-file S3 keys and SHA-256 digests in the manifest.
-    manifest_files = manifest.get("files", [])
+    # Both the original bootstrap manifest and the dynamic uploader record a
+    # per-page S3 key and SHA-256 digest. Every downloaded page must be covered.
     expected_hashes: dict[str, str] = {}
-    if isinstance(manifest_files, list):
-        for item in manifest_files:
-            if isinstance(item, dict) and item.get("s3_key") and item.get("sha256"):
-                expected_hashes[str(item["s3_key"])] = str(item["sha256"])
+    expected_sizes: dict[str, int] = {}
+    for item in manifest_files:
+        key = str(item["s3_key"])
+        digest = str(item.get("sha256") or "")
+        size_value = item.get("size_bytes")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            raise RuntimeError(f"Bronze manifest has an invalid SHA-256 for {key}.")
+        try:
+            size_bytes = int(size_value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Bronze manifest has an invalid size for {key}.") from exc
+        if size_bytes <= 0:
+            raise RuntimeError(f"Bronze manifest reports an empty object: {key}.")
+        expected_hashes[key] = digest.lower()
+        expected_sizes[key] = size_bytes
+
+    for key in keys:
+        head = s3.head_object(Bucket=bucket, Key=key)
+        if head.get("ContentLength") != expected_sizes[key]:
+            raise RuntimeError(f"S3 page size does not match the manifest: s3://{bucket}/{key}.")
 
     run_dir = cache_root / f"extraction_id={extraction_id}" / "data"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -245,15 +353,48 @@ def download_extraction(
         raw_count += validate_page(local_path)
 
     expected_records = manifest.get("raw_record_count")
+    if expected_records is None:
+        expected_records = manifest.get("records_collected")
     if expected_records is not None and int(expected_records) != raw_count:
         raise RuntimeError(
             f"Raw-record count mismatch for {extraction_id}: "
             f"manifest={expected_records}, downloaded pages={raw_count}."
         )
 
+    reported_total = manifest.get("api_reported_total")
+    if reported_total is None:
+        reported_totals = manifest.get("api_total_values_reported")
+        if isinstance(reported_totals, list) and len(reported_totals) == 1:
+            reported_total = reported_totals[0]
+    if reported_total is not None and int(reported_total) != raw_count:
+        raise RuntimeError(
+            f"API-reported total mismatch for {extraction_id}: "
+            f"manifest={reported_total}, downloaded pages={raw_count}."
+        )
+
+    retrieved_at_utc = parse_extraction_time(extraction_id).isoformat().replace("+00:00", "Z")
+    bronze_uploaded_at_utc = manifest.get("uploaded_at_utc") or retrieved_at_utc
+    if not isinstance(bronze_uploaded_at_utc, str):
+        raise RuntimeError(f"Invalid uploaded_at_utc in Bronze manifest for {extraction_id}.")
+    try:
+        parsed_upload_time = datetime.fromisoformat(
+            bronze_uploaded_at_utc.replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Invalid uploaded_at_utc in Bronze manifest for {extraction_id}: "
+            f"{bronze_uploaded_at_utc!r}."
+        ) from exc
+    if parsed_upload_time.tzinfo is None:
+        raise RuntimeError(
+            f"Bronze uploaded_at_utc must include a timezone for {extraction_id}."
+        )
+    bronze_uploaded_at_utc = parsed_upload_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     summary = {
         "extraction_id": extraction_id,
-        "retrieved_at_utc": parse_extraction_time(extraction_id).isoformat().replace("+00:00", "Z"),
+        "retrieved_at_utc": retrieved_at_utc,
+        "bronze_uploaded_at_utc": bronze_uploaded_at_utc,
         "page_count": len(keys),
         "raw_record_count": raw_count,
         "s3_manifest_key": manifest_key,
@@ -263,8 +404,22 @@ def download_extraction(
     return run_dir, summary
 
 
-def build_spark_dataframe(spark: Any, extraction_id: str, page_files: list[Path]) -> Any:
+def build_spark_dataframe(
+    spark: Any,
+    extraction_id: str,
+    page_files: list[Path],
+    ingested_at_utc: str,
+) -> Any:
     from pyspark.sql import functions as F
+
+    try:
+        ingested_at_value = datetime.fromisoformat(
+            ingested_at_utc.replace("Z", "+00:00")
+        ).astimezone(timezone.utc).replace(tzinfo=None)
+    except (AttributeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid UTC ingestion timestamp for extraction {extraction_id}: {ingested_at_utc!r}."
+        ) from exc
 
     if not page_files:
         raise RuntimeError(f"No cached JSON pages available for extraction {extraction_id}.")
@@ -382,7 +537,9 @@ def build_spark_dataframe(spark: Any, extraction_id: str, page_files: list[Path]
         deduplicated.withColumn("candidate_station_key", F.sha2(station_identity, 256))
         .withColumn("candidate_entity_key", F.sha2(entity_identity, 256))
         .withColumn("source_page_count", F.size(F.col("source_pages")))
-        .withColumn("ingested_at_utc", F.current_timestamp())
+        # Use the immutable Bronze manifest timestamp, not Spark's current time,
+        # so replaying the same extraction produces the same record values.
+        .withColumn("ingested_at_utc", F.lit(ingested_at_value).cast("timestamp"))
         .drop("_valid_measure_count", "_min_value_clean", "_max_value_clean", "_avg_value_clean")
     )
 
@@ -455,16 +612,18 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
-    if args.output_dir.exists():
-        if not args.overwrite_output:
-            print(
-                f"ERROR: Output directory already exists: {args.output_dir}\n"
-                "To avoid accidental data loss, choose a new --output-dir or pass "
-                "--overwrite-output after confirming the directory contains only a prior generated build.",
-                file=sys.stderr,
-            )
-            return 2
-        shutil.rmtree(args.output_dir)
+    if args.output_partitions <= 0:
+        print("ERROR: --output-partitions must be greater than zero.", file=sys.stderr)
+        return 2
+
+    try:
+        args.output_dir = prepare_output_directory(
+            args.output_dir,
+            overwrite=args.overwrite_output,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: unsafe or unavailable output directory: {exc}", file=sys.stderr)
+        return 2
 
     try:
         session = boto3.Session(profile_name=args.profile, region_name=args.region)
@@ -507,11 +666,11 @@ def main() -> int:
         return 2
 
     spark = (
-        SparkSession.builder.appName("CPCBHistoricalSilverBootstrap")
+        SparkSession.builder.appName("CPCBHistoricalSilver")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.speculation", "false")
-        .config("mapreduce.fileoutputcommitter.algorithm.version", "2")
+        .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -521,7 +680,12 @@ def main() -> int:
     try:
         for extraction_id, run_dir, run_info in downloaded:
             page_files = sorted(run_dir.glob("*.json"))
-            raw_df = build_spark_dataframe(spark, extraction_id, page_files)
+            raw_df = build_spark_dataframe(
+                spark,
+                extraction_id,
+                page_files,
+                run_info["bronze_uploaded_at_utc"],
+            )
             raw_df.cache()
             unique_count = raw_df.count()
             run_report = dataframe_run_summary(raw_df)
@@ -566,6 +730,7 @@ def main() -> int:
             "source_last_update_timezone_assigned": False,
             "notes": [
                 "retrieved_at_utc is derived from the UTC extraction ID, not from CPCB last_update.",
+                "ingested_at_utc is sourced from the immutable Bronze manifest upload timestamp; legacy manifests without that field fall back to retrieved_at_utc.",
                 "source_last_update_raw is retained as supplied; no timezone is inferred.",
                 "candidate station keys are built from source names and are not official CPCB station IDs.",
                 "exact duplicates are collapsed only within the same extraction ID.",
@@ -575,7 +740,13 @@ def main() -> int:
 
         # Prevent small local Windows writes from producing excess output files.
         args.output_dir.parent.mkdir(parents=True, exist_ok=True)
-        historical.coalesce(1).write.mode("errorifexists").partitionBy("ingestion_date").parquet(str(args.output_dir))
+        (
+            historical.repartition(args.output_partitions, "candidate_entity_key")
+            .sortWithinPartitions("candidate_entity_key", "source_record_hash")
+            .write.mode("errorifexists")
+            .partitionBy("ingestion_date")
+            .parquet(str(args.output_dir))
+        )
 
         report_path = args.output_dir.parent / f"{args.output_dir.name}_quality_report.json"
         report_path.write_text(json.dumps(overall_report, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
